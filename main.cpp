@@ -126,6 +126,7 @@ int main() {
 
     // Prepare data
     const int M = OCL_GEMM_M, N = OCL_GEMM_N, K = OCL_GEMM_K;
+    const int kernel_id = OCL_GEMM_KERNEL;
 
     auto global_sizes = cl::NDRange(M, N);
     auto local_sizes = cl::NullRange;
@@ -144,7 +145,7 @@ int main() {
     queue.enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
 
     // OpenCL kernel
-    auto kernel_name = std::string("GEMM") + std::to_string(OCL_GEMM_KERNEL);
+    auto kernel_name = std::string("GEMM") + std::to_string(kernel_id);
     cl::Kernel kernel(program, kernel_name.c_str());
     kernel.setArg(0, M);
     kernel.setArg(1, N);

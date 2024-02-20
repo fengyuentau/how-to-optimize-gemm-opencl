@@ -1,0 +1,6 @@
+build/
+build/**
+
+# clangd caches
+.cache/
+.cache/**
