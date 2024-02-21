@@ -1,12 +1,12 @@
 #include <iostream>
 #include <vector>
-#include <random>
 
 #include <string>
 #include <sstream>
 #include <fstream>
 
 #include "settings.hpp"
+#include "utils/init_vector.hpp"
 
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #define CL_HPP_TARGET_OPENCL_VERSION 120
@@ -26,23 +26,6 @@ std::string readKernel(const std::string &filename) {
     auto kernel_str = stream.str();
 
     return hpp_str + kernel_str;
-}
-
-void initVector(std::vector<float> &vec) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-
-    std::uniform_real_distribution<float> distribution(0.0, 1.0);
-
-    for (int i = 0; i < vec.size(); i++) {
-        vec[i] = distribution(gen);
-    }
-}
-
-void initVector(std::vector<float> &vec, float val) {
-    for (int i = 0; i < vec.size(); i++) {
-        vec[i] = val;
-    }
 }
 
 void RefGemm(const int M, const int N, const int K,
@@ -82,11 +65,6 @@ int main() {
         std::cerr << "Cannot get OpenCL platforms" << std::endl;
         return 1;
     }
-    for (size_t i = 0; i < platforms.size(); i++) {
-        std::string platform_name;
-        auto status = platforms[i].getInfo(CL_PLATFORM_NAME, &platform_name);
-        std::cout << platform_name << std::endl;
-    }
     auto platform = platforms[0];
 
     // OpenCL devices
@@ -97,10 +75,6 @@ int main() {
         return 1;
     }
     auto device = devices[0];
-    // size_t maxWorkGroupSize; // Max number of work iterms allowed in a group
-    // device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &maxWorkGroupSize);
-    // std::cout << "Maximum Work Group Size: " << maxWorkGroupSize << std::endl;
-
 
     // OpenCL context, queue
     auto context = cl::Context(std::vector<cl::Device>{device});
@@ -115,16 +89,8 @@ int main() {
         exit(1);
     }
 
-    // /* Get PTX assembly and save
-    // */
-    // // Get the program binary for the device
-    // std::vector<unsigned char> binary = program.getInfo<CL_PROGRAM_BINARIES>()[0];
-    // // Write the binary to a file
-    // std::ofstream binaryFile("kernel" + std::to_string(OCL_GEMM_KERNEL) + ".bin", std::ios::out | std::ios::binary);
-    // binaryFile.write(reinterpret_cast<char*>(binary.data()), binary.size());
-    // binaryFile.close();
-
     // Prepare data
+    const int test_loops = TEST_LOOPS;
     const int M = OCL_GEMM_M, N = OCL_GEMM_N, K = OCL_GEMM_K;
     const int kernel_id = OCL_GEMM_KERNEL;
 
@@ -160,8 +126,11 @@ int main() {
     }
 
     // Send back data from device to host
-    cl::finish();
-    queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
+    cl::Event event{nullptr};
+    for (int i = 0; i < TEST_LOOPS; i++) {
+        queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+        cl::WaitForEvents({event});
+    }
 
     // Compare with Ref
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
