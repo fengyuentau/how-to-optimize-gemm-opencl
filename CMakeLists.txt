@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project("how-to-optimize-gemm-opencl")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_STANDARD 11)
 
 find_package(OpenCL)
 
@@ -13,6 +14,6 @@ else()
 endif()
 
 if(OpenCL_FOUND)
-    add_executable(main main.cpp)
+    add_executable(main main.cpp utils/init_vector.cpp)
     target_link_libraries(main "OpenCL")
 endif()

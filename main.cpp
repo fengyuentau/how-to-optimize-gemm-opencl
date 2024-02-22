@@ -1,5 +1,7 @@
 #include <iostream>
 #include <vector>
+#include <numeric>
+#include <algorithm>
 
 #include <string>
 #include <sstream>
@@ -7,6 +9,7 @@
 
 #include "settings.hpp"
 #include "utils/init_vector.hpp"
+#include "utils/timer.hpp"
 
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #define CL_HPP_TARGET_OPENCL_VERSION 120
@@ -98,9 +101,8 @@ int main() {
     auto local_sizes = cl::NullRange;
 
     std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
-    initVector(A_host);
-    initVector(B_host);
-    initVector(C_host, 0.f);
+    InitVector(A_host);
+    InitVector(B_host);
 
     // OpenCL buffers
     auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
@@ -120,26 +122,43 @@ int main() {
     kernel.setArg(4, B_device);
     kernel.setArg(5, C_device);
 
-    auto error = queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes);
-    if (error != CL_SUCCESS) {
-        std::cout << "error code: " << error << std::endl;
+    // Run kernel
+    TickMeter meter;
+    std::vector<double> elapsed_times;
+    cl::Event event{nullptr};
+    for (int i = 0; i < test_loops; i++) {
+        meter.Start();
+
+        auto error = queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+        if (error != CL_SUCCESS) {
+            std::cout << "error code: " << error << std::endl;
+        }
+        cl::WaitForEvents({event});
+
+        meter.End();
+        elapsed_times.push_back(meter.GetTimeMillisecond());
     }
 
     // Send back data from device to host
-    cl::Event event{nullptr};
-    for (int i = 0; i < TEST_LOOPS; i++) {
-        queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
-        cl::WaitForEvents({event});
-    }
+    queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+    cl::WaitForEvents({event});
 
     // Compare with Ref
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
     bool ret = Compare(M, N, C_host.data(), C_ref.data());
     if (ret) {
-        std::cout << "All good!" << std::endl;
+        std::cout << "Acc: All good!" << std::endl;
     } else {
-        std::cout << "Something is wrong!" << std::endl;
+        std::cout << "Acc: Something is wrong!" << std::endl;
     }
+
+    std::sort(elapsed_times.begin(), elapsed_times.end());
+    double mean = std::accumulate(elapsed_times.begin(), elapsed_times.end(), 0.f) / (double)elapsed_times.size();
+    double median = elapsed_times.size() % 2 == 0 ?
+                    (elapsed_times[static_cast<size_t>(test_loops / 2) - 1] + elapsed_times[static_cast<size_t>(test_loops / 2)]) / 2.0f :
+                    elapsed_times[static_cast<size_t>(test_loops / 2)];
+    double minimum = elapsed_times[0];
+    printf("mean=%.2fms, median=%.2fms, min=%.2fms\n", mean, median, minimum);
 
     return 0;
 }

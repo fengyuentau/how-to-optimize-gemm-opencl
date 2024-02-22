@@ -1,6 +1,6 @@
 # how-to-optimize-gemm-opencl
 
-Step-by-step GEMM optimization tutorial on OpenCL GPU platforms (OpenCL >= 1.2)
+Step-by-step row major GEMM optimization tutorial on OpenCL GPU platforms (OpenCL >= 1.2). Tested on Khadas VIM4 (A311D2).
 
 ## Environment
 

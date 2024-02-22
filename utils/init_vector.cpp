@@ -1,6 +1,6 @@
 #include "init_vector.hpp"
 
-void initVector(std::vector<float> &vec) {
+void InitVector(std::vector<float> &vec) {
     std::random_device rd;
     std::mt19937 gen(rd());
 
@@ -11,7 +11,7 @@ void initVector(std::vector<float> &vec) {
     }
 }
 
-void initVector(std::vector<float> &vec, float val) {
+void InitVector(std::vector<float> &vec, float val) {
     for (int i = 0; i < vec.size(); i++) {
         vec[i] = val;
     }
