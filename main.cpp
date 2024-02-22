@@ -1,7 +1,5 @@
 #include <iostream>
 #include <vector>
-#include <numeric>
-#include <algorithm>
 
 #include <string>
 #include <sstream>
@@ -124,7 +122,6 @@ int main() {
 
     // Run kernel
     TickMeter meter;
-    std::vector<double> elapsed_times;
     cl::Event event{nullptr};
     for (int i = 0; i < test_loops; i++) {
         meter.Start();
@@ -136,7 +133,6 @@ int main() {
         cl::WaitForEvents({event});
 
         meter.End();
-        elapsed_times.push_back(meter.GetTimeMillisecond());
     }
 
     // Send back data from device to host
@@ -152,13 +148,12 @@ int main() {
         std::cout << "Acc: Something is wrong!" << std::endl;
     }
 
-    std::sort(elapsed_times.begin(), elapsed_times.end());
-    double mean = std::accumulate(elapsed_times.begin(), elapsed_times.end(), 0.f) / (double)elapsed_times.size();
-    double median = elapsed_times.size() % 2 == 0 ?
-                    (elapsed_times[static_cast<size_t>(test_loops / 2) - 1] + elapsed_times[static_cast<size_t>(test_loops / 2)]) / 2.0f :
-                    elapsed_times[static_cast<size_t>(test_loops / 2)];
-    double minimum = elapsed_times[0];
-    printf("mean=%.2fms, median=%.2fms, min=%.2fms\n", mean, median, minimum);
+    // Print benchmark results
+    double mean = meter.GetMeanTimeMillisecond(),
+           median = meter.GetMedianTimeMillisecond(),
+           minimum = meter.GetMinTimeMillisecond();
+    printf("mean=%.2fms, median=%.2fms, min=%.2fms\n",
+           mean, median, minimum);
 
     return 0;
 }
