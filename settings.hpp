@@ -1,7 +1,10 @@
-#define TEST_LOOPS 100
+#define TEST_SCALE_FACTOR 2
+#define TEST_SCALE_START TEST_SCALE_FACTOR<<6 // 128
+#define TEST_SCALE_END TEST_SCALE_FACTOR<<9  // 1024
+#define TEST_NUM_REPEATS 2
 
-#define OCL_GEMM_M 320
-#define OCL_GEMM_N 320
-#define OCL_GEMM_K 320
+#define OCL_GEMM_M -1
+#define OCL_GEMM_N -1
+#define OCL_GEMM_K -1
 
 #define OCL_GEMM_KERNEL           1

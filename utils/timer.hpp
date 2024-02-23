@@ -18,6 +18,11 @@ public:
         started = false;
     }
 
+    void Reset() {
+        elapsed_times.clear();
+        started = false;
+    }
+
     double GetTimeMillisecond() {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         return elapsed.count();
