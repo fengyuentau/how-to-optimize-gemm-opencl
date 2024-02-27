@@ -7,4 +7,5 @@
 #define OCL_GEMM_N -1
 #define OCL_GEMM_K -1
 
-#define OCL_GEMM_KERNEL           1
+#define OCL_GEMM_KERNEL           2
+#define OCL_GEMM_KERNEL_TILE_SIZE 16

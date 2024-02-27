@@ -82,6 +82,9 @@ int worker(const int M, const int N, const int K,
 
     // OpenCL program
     auto kernels = readKernel("kernels.cl");
+#if DEBUG
+    std::cout << "Kernels script:" << std::endl << kernels << std::endl;
+#endif
     // std::cout << kernels << std::endl;
     cl::Program program(context, kernels);
     if (program.build({device}) != CL_SUCCESS) {
@@ -115,8 +118,16 @@ int worker(const int M, const int N, const int K,
 
     // Run kernel
     cl::Event event{nullptr};
-    auto global_sizes = cl::NDRange(M, N),
+    auto global_sizes = cl::NullRange,
          local_sizes = cl::NullRange;
+    if (kernel_id == 1) {
+        global_sizes = cl::NDRange(M, N);
+    }
+    if (kernel_id == 2) {
+        const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+        global_sizes = cl::NDRange(M, N);
+        local_sizes = cl::NDRange(tile_size, tile_size);
+    }
     for (int i = 0; i < test_num_repeats; i++) {
         meter.Start();
 
@@ -163,7 +174,8 @@ int main() {
 
         // printf("M=%d, N=%d, K=%d, mean=%.2fms, median=%.2fms, min=%.2fms\n",
         //        M, N, K, mean, median, minimum);
-        std::cout << "M=" << M << " N=" << N << " K=" << K
+        std::cout << "kernel: " << kernel_id
+                  << "M=" << M << " N=" << N << " K=" << K
                   << " mean=" << mean << " median=" << median << " min=" << minimum
                   << " gflops=" << gflops << " max_diff=" << max_diff << std::endl;
     }

@@ -18,3 +18,13 @@ Linux:
 cmake -B build .
 cmake --build build
 ```
+
+## FAQ
+
+### Render permission denied
+
+See https://dgpu-docs.intel.com/driver/installation.html#configuring-render-group-membership.
+
+## License
+
+[Apache 2.0 License](./LICENSE)
