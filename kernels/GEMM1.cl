@@ -1,42 +1,8 @@
-/* Row major GEMM kernels:
-
-    Mat     Row     Col
-    A       M       K
-    B       K       N
-    C       M       N
-
-*/
-
-#define DEBUG 0
-
-#if OCL_GEMM_KERNEL == 1
-// Naive implementation
-__kernel void GEMM1(const int M, const int N, const int K,
-                    const __global float *A,
-                    const __global float *B,
-                    __global float *C) {
-    const int global_row_index = get_global_id(0);
-    const int global_col_index = get_global_id(1);
-
-#if DEBUG
-    printf("global_row_index=%d, global_col_index=%d\n", global_row_index, global_col_index);
-#endif
-
-    float c = 0.f;
-    for (int k = 0; k < K; k++) {
-        c += A[global_row_index * K + k] * B[k * N + global_col_index];
-    }
-
-    C[global_row_index * N + global_col_index] = c;
-}
-#endif
-
-#if OCL_GEMM_KERNEL == 2
 // Tiling on the three dimensions using local memory
-__kernel void GEMM2(const int M, const int N, const int K,
-                    const __global float *A,
-                    const __global float *B,
-                    __global float *C) {
+__kernel void GEMM(const int M, const int N, const int K,
+                   const __global float *A,
+                   const __global float *B,
+                   __global float *C) {
     const int tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
 
     // Index inside a tile
@@ -74,4 +40,3 @@ __kernel void GEMM2(const int M, const int N, const int K,
     // Store result
     C[global_row_index * N + global_col_index] = c;
 }
-#endif
