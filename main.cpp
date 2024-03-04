@@ -110,7 +110,12 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     } else if (kernel_file.find("GEMM1") != std::string::npos) {
         const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
         global_sizes = cl::NDRange(M, N);
-        local_sizes = cl::NDRange(tile_size, tile_size);
+        local_sizes = cl::NDRange(tile_size, tile_size); // tile_size x tile_size <= Max work group size
+    } else if (kernel_file.find("GEMM2") != std::string::npos) {
+        const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+        const size_t work_per_thread = OCL_GEMM_KERNEL_WORK_PER_THREAD;
+        global_sizes = cl::NDRange(M, N / work_per_thread);
+        local_sizes = cl::NDRange(tile_size, tile_size / work_per_thread);
     }
     TickMeter meter;
     meter.Reset();
@@ -147,7 +152,7 @@ int worker(cl::Device &device, const int M, const int N, const int K,
 }
 
 int main(int argc, char **argv) {
-    std::string kernel_file = "kernels/GEMM1.cl";
+    std::string kernel_file = "kernels/GEMM0.cl";
     if (argc == 2) {
         kernel_file = std::string(argv[1]);
     }

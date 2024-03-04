@@ -19,6 +19,13 @@ cmake -B build .
 cmake --build build
 ```
 
+## Run
+
+```shell
+python3 run.py # Run all kernels in ./kernels
+python3 run.py -k GEMM0 # Run ./kernels/GEMM0.cl
+```
+
 ## FAQ
 
 ### Render permission denied

@@ -11,10 +11,12 @@ def main(args):
     print(all_kernels)
 
     selected_kernel = list(all_kernels.values()) if args.kernel == "all" else [all_kernels[args.kernel.lower()]]
-    print(selected_kernel)
+    selected_kernel = sorted(selected_kernel)
 
     for k in selected_kernel:
         output = subprocess.run(["./build/main", k], stdout=subprocess.PIPE)
+        if output.stderr is not None:
+            print(k, output.stderr.decode("utf-8"))
         output = output.stdout.decode("utf-8")
         output_lines = output.splitlines()
 
