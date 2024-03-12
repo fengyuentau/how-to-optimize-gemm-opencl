@@ -71,8 +71,12 @@ int worker(cl::Device &device, const int M, const int N, const int K,
 #if DEBUG
     std::cout << "Kernels script:" << std::endl << kernels << std::endl;
 #endif
+    std::string build_options;
+    if (kernel_file.find("mnn") != std::string::npos) {
+        build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
+    }
     cl::Program program(context, kernels);
-    if (program.build({device}) != CL_SUCCESS) {
+    if (program.build({device}, build_options.c_str()) != CL_SUCCESS) {
         std::cout << "Error building: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << std::endl;
         return -1;
     }
@@ -94,29 +98,49 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     // OpenCL kernel setup
     auto kernel_name = std::string("GEMM");
     cl::Kernel kernel(program, kernel_name.c_str());
-    kernel.setArg(0, M);
-    kernel.setArg(1, N);
-    kernel.setArg(2, K);
-    kernel.setArg(3, A_device);
-    kernel.setArg(4, B_device);
-    kernel.setArg(5, C_device);
+    auto global_sizes = cl::NullRange,
+         local_sizes = cl::NullRange;
+    if (kernel_file.find("mnn") != std::string::npos) {
+        const int height = M,
+                  outputChannel = N,
+                  width = N,
+                  outputChannelBlocks = static_cast<int>((outputChannel + 4 - 1) / 4),
+                  widthBlocks = static_cast<int>((width + 4 - 1) / 4);
+        kernel.setArg(0, widthBlocks);
+        kernel.setArg(1, height);
+        kernel.setArg(2, A_device);
+        kernel.setArg(3, B_device);
+        kernel.setArg(4, C_device); // no_bias
+        kernel.setArg(5, outputChannel);
+        kernel.setArg(6, outputChannelBlocks);
+        kernel.setArg(7, widthBlocks);
+        kernel.setArg(8, width);
+
+        global_sizes = cl::NDRange(M, N);
+    } else { // GEMM
+        kernel.setArg(0, M);
+        kernel.setArg(1, N);
+        kernel.setArg(2, K);
+        kernel.setArg(3, A_device);
+        kernel.setArg(4, B_device);
+        kernel.setArg(5, C_device);
+
+        if (kernel_file.find("GEMM0") != std::string::npos) {
+            global_sizes = cl::NDRange(M, N);
+        } else if (kernel_file.find("GEMM1") != std::string::npos) {
+            const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+            global_sizes = cl::NDRange(M, N);
+            local_sizes = cl::NDRange(tile_size, tile_size); // tile_size x tile_size <= Max work group size
+        } else if (kernel_file.find("GEMM2") != std::string::npos) {
+            const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+            const size_t work_per_thread = OCL_GEMM_KERNEL_WORK_PER_THREAD;
+            global_sizes = cl::NDRange(M, N / work_per_thread);
+            local_sizes = cl::NDRange(tile_size, tile_size / work_per_thread);
+        }
+    }
 
     // Run kernel
     cl::Event event{nullptr};
-    auto global_sizes = cl::NullRange,
-         local_sizes = cl::NullRange;
-    if (kernel_file.find("GEMM0") != std::string::npos) {
-        global_sizes = cl::NDRange(M, N);
-    } else if (kernel_file.find("GEMM1") != std::string::npos) {
-        const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
-        global_sizes = cl::NDRange(M, N);
-        local_sizes = cl::NDRange(tile_size, tile_size); // tile_size x tile_size <= Max work group size
-    } else if (kernel_file.find("GEMM2") != std::string::npos) {
-        const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
-        const size_t work_per_thread = OCL_GEMM_KERNEL_WORK_PER_THREAD;
-        global_sizes = cl::NDRange(M, N / work_per_thread);
-        local_sizes = cl::NDRange(tile_size, tile_size / work_per_thread);
-    }
     TickMeter meter;
     meter.Reset();
     for (int i = 0; i < test_num_repeats; i++) {
