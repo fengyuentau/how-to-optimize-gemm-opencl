@@ -8,6 +8,8 @@ def main(args):
         if k.endswith(".cl"):
             key = k[:-3].lower()
             all_kernels[key] = os.path.join("kernels", k)
+    if args.with_clblast:
+        all_kernels["clblast"] = "clblast"
     print(all_kernels)
 
     selected_kernel = list(all_kernels.values()) if args.kernel == "all" else [all_kernels[args.kernel.lower()]]
@@ -22,7 +24,7 @@ def main(args):
 
         platform_name = output_lines[0]
         device_name = output_lines[1]
-        kernel_name = k.split("/")[-1][:-3]
+        kernel_name = k if k == "clblast" else k.split("/")[-1][:-3]
         log_name = "{}+{}+{}.txt".format(platform_name, device_name, kernel_name)
         with open(os.path.join(args.save_dir, log_name), "w") as f:
             for line in output_lines[2:]:
@@ -33,5 +35,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("")
     parser.add_argument("--kernel", "-k", default="all")
     parser.add_argument("--save_dir", "-s", default="results")
+    parser.add_argument("--with_clblast", action="store_true")
     args = parser.parse_args()
     main(args)

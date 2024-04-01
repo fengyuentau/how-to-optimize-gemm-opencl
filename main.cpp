@@ -13,6 +13,10 @@
 #define CL_HPP_TARGET_OPENCL_VERSION 120
 #include "CL/opencl.hpp"
 
+#ifdef HAVE_CLBLAST
+#include "clblast.h"
+#endif
+
 #define DEBUG 0
 #if DEBUG
 #define TEST_NUM_REPEATS 1
@@ -175,6 +179,79 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     return 1;
 }
 
+#ifdef HAVE_CLBLAST
+int worker_clblast(cl::Device &device, const int M, const int N, const int K,
+                   const int test_num_repeats) {
+    // OpenCL context
+    auto context = cl::Context(std::vector<cl::Device>{device});
+
+    // Prepare data
+    std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
+    InitVector(A_host);
+    InitVector(B_host);
+    int lda = K, ldb = N, ldc = N;
+
+    // Transer host data to OpenCL device buffers
+    auto queue = cl::CommandQueue(context, device);
+    auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
+    auto B_device = cl::Buffer(context, CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
+    auto C_device = cl::Buffer(context, CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
+    queue.enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
+    queue.enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
+    queue.enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
+
+    // Run CLBlast GEMM
+    cl::Event event{nullptr};
+    auto raw_queue = queue();
+    auto raw_event = event();
+    TickMeter meter;
+    meter.Reset();
+    for (int i = 0; i < test_num_repeats; i++) {
+        meter.Start();
+
+        auto status = clblast::Gemm(clblast::Layout::kRowMajor,
+                                    clblast::Transpose::kNo,
+                                    clblast::Transpose::kNo,
+                                    M, N, K,
+                                    1.f, // alpha
+                                    A_device(), 0, lda,
+                                    B_device(), 0, ldb,
+                                    0.f, // beta
+                                    C_device(), 0, ldc,
+                                    &raw_queue, &raw_event);
+        if (status == clblast::StatusCode::kSuccess) {
+            clWaitForEvents(1, &raw_event);
+        }
+
+        meter.End();
+    }
+
+    // Get data from device to host
+    queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+    cl::WaitForEvents({event});
+
+    // Compare with Ref
+    RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
+    float max_diff = Compare(M, N, C_host.data(), C_ref.data());
+
+    double mean = meter.GetMeanTimeMillisecond(),
+           median = meter.GetMedianTimeMillisecond(),
+           minimum = meter.GetMinTimeMillisecond();
+
+    double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
+
+    printf("Kernel: CLBlast, M=%d, N=%d, K=%d, mean=%.2fms, median=%.2fms, min=%.2fms, gflops=%f, max_diff=%f\n",
+            M, N, K, mean, median, minimum, gflops, max_diff);
+
+    return 1;
+}
+#else
+int worker_clblast(cl::Device &device, const int M, const int N, const int K,
+                const int test_num_repeats) {
+    printf("CLBlast not found!\n");
+}
+#endif
+
 int main(int argc, char **argv) {
     std::string kernel_file = "kernels/GEMM0.cl";
     if (argc == 2) {
@@ -214,7 +291,11 @@ int main(int argc, char **argv) {
         const int M = OCL_GEMM_M < 0 ? scale : OCL_GEMM_M,
                   N = OCL_GEMM_N < 0 ? scale : OCL_GEMM_N,
                   K = OCL_GEMM_K < 0 ? scale : OCL_GEMM_K;
-        worker(device, M, N, K, test_num_repeats, kernel_file);
+        if (kernel_file == "clblast") {
+            worker_clblast(device, M, N, K, test_num_repeats);
+        } else {
+            worker(device, M, N, K, test_num_repeats, kernel_file);
+        }
     }
 
     return 0;

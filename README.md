@@ -19,6 +19,24 @@ cmake -B build .
 cmake --build build
 ```
 
+Build with CLBlast:
+
+```
+# Get and build CLBlast
+cd $workspace
+git clone https://github.com/CNugteren/CLBlast
+cd CLBlast
+cmake -B build -DCMAKE_INSTALL_PREFIX=build/install .
+cmake --build build --target install
+
+# Build this repo
+cd $workspace
+cd how-to-optimize-gemm-opencl
+export CLBlast_DIR=/path/to/CLBlast/build/install/lib/cmake/CLBlast
+cmake -B build -DWITH_CLBLAST=ON .
+cmake --build build
+```
+
 ## Run
 
 ```shell
