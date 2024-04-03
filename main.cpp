@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <algorithm>
 
 #include <string>
 #include <sstream>
@@ -7,7 +8,6 @@
 
 #include "settings.hpp"
 #include "utils/init_vector.hpp"
-#include "utils/timer.hpp"
 
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #define CL_HPP_TARGET_OPENCL_VERSION 120
@@ -21,6 +21,25 @@
 #if DEBUG
 #define TEST_NUM_REPEATS 1
 #endif
+
+double GetMeanTimeMillisecond(std::vector<double> elapsed_times) {
+    return std::accumulate(elapsed_times.begin(), elapsed_times.end(), 0.f) / (double)elapsed_times.size();
+}
+
+double GetMedianTimeMillisecond(std::vector<double> elapsed_times) {
+    std::sort(elapsed_times.begin(), elapsed_times.end());
+
+    auto half_length = static_cast<size_t>(elapsed_times.size() / 2);
+    return elapsed_times.size() % 2 == 0 ?
+                (elapsed_times[half_length - 1] + elapsed_times[half_length]) / 2.0f :
+                elapsed_times[half_length];
+}
+
+double GetMinTimeMillisecond(std::vector<double> elapsed_times) {
+    std::sort(elapsed_times.begin(), elapsed_times.end());
+
+    return elapsed_times.front();
+}
 
 std::string readKernel(const std::string &filename) {
     std::ifstream fhpp;
@@ -91,7 +110,7 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     InitVector(B_host);
 
     // Transer host data to OpenCL device buffers
-    auto queue = cl::CommandQueue(context, device);
+    auto queue = cl::CommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE);
     auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
     auto B_device = cl::Buffer(context, CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
     auto C_device = cl::Buffer(context, CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
@@ -145,18 +164,16 @@ int worker(cl::Device &device, const int M, const int N, const int K,
 
     // Run kernel
     cl::Event event{nullptr};
-    TickMeter meter;
-    meter.Reset();
+    std::vector<double> elapsed_times;
     for (int i = 0; i < test_num_repeats; i++) {
-        meter.Start();
-
         auto error = queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
         if (error != CL_SUCCESS) {
             std::cout << "error code: " << error << std::endl;
         }
         cl::WaitForEvents({event});
-
-        meter.End();
+        double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+        double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+        elapsed_times.push_back(((end - start) / 1000.0));
     }
 
     // Get data from device to host
@@ -167,9 +184,9 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
     float max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
-    double mean = meter.GetMeanTimeMillisecond(),
-           median = meter.GetMedianTimeMillisecond(),
-           minimum = meter.GetMinTimeMillisecond();
+    double mean = GetMeanTimeMillisecond(elapsed_times),
+           median = GetMedianTimeMillisecond(elapsed_times),
+           minimum = GetMinTimeMillisecond(elapsed_times);
 
     double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
 
@@ -192,7 +209,7 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
     int lda = K, ldb = N, ldc = N;
 
     // Transer host data to OpenCL device buffers
-    auto queue = cl::CommandQueue(context, device);
+    auto queue = cl::CommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE);
     auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
     auto B_device = cl::Buffer(context, CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
     auto C_device = cl::Buffer(context, CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
@@ -202,13 +219,10 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
 
     // Run CLBlast GEMM
     cl::Event event{nullptr};
+    std::vector<double> elapsed_times;
     auto raw_queue = queue();
     auto raw_event = event();
-    TickMeter meter;
-    meter.Reset();
     for (int i = 0; i < test_num_repeats; i++) {
-        meter.Start();
-
         auto status = clblast::Gemm(clblast::Layout::kRowMajor,
                                     clblast::Transpose::kNo,
                                     clblast::Transpose::kNo,
@@ -221,9 +235,12 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
                                     &raw_queue, &raw_event);
         if (status == clblast::StatusCode::kSuccess) {
             clWaitForEvents(1, &raw_event);
+            cl_ulong start_time, end_time;
+            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
+            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
+            double elapsed_time = (end_time - start_time) / 1000.0;
+            elapsed_times.push_back(elapsed_time);
         }
-
-        meter.End();
     }
 
     // Get data from device to host
@@ -234,9 +251,9 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
     float max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
-    double mean = meter.GetMeanTimeMillisecond(),
-           median = meter.GetMedianTimeMillisecond(),
-           minimum = meter.GetMinTimeMillisecond();
+    double mean = GetMeanTimeMillisecond(elapsed_times),
+           median = GetMedianTimeMillisecond(elapsed_times),
+           minimum = GetMinTimeMillisecond(elapsed_times);
 
     double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
 
