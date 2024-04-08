@@ -95,7 +95,20 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     std::cout << "Kernels script:" << std::endl << kernels << std::endl;
 #endif
     std::string build_options;
-    if (kernel_file.find("mnn") != std::string::npos) {
+    if (kernel_file.find("opencv") != std::string::npos) {
+        size_t maxWorkGroupSize;
+        device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &maxWorkGroupSize);
+        int output_size_min = std::min(M, N);
+        int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
+        int cn = 1;
+	int kercn = 4;
+        int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
+
+        build_options = "-DT=float -DT1=float -DWT=float4 -Dcn=" + std::to_string(cn) + " -Dkercn=" + std::to_string(kercn) + " -DLOCAL_SIZE=" + std::to_string(block_size);
+        build_options += (N % block_size != 0) ? " -D NO_MULT" : "";
+        // build_options += ""; // haveC
+        // build_options += ""; // doubleSupport
+    } else if (kernel_file.find("mnn") != std::string::npos) {
         build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
     }
     cl::Program program(context, kernels);
@@ -123,7 +136,44 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     cl::Kernel kernel(program, kernel_name.c_str());
     auto global_sizes = cl::NullRange,
          local_sizes = cl::NullRange;
-    if (kernel_file.find("mnn") != std::string::npos) {
+    if (kernel_file.find("opencv") != std::string::npos) {
+        size_t maxWorkGroupSize;
+        device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &maxWorkGroupSize);
+        int output_size_min = std::min(M, N);
+        int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
+        int cn = 1;
+        int kercn = 4;
+        int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
+
+        const int A_step = K * 4, A_offset = 0,
+                  B_step = N * 4, B_offset = 0,
+                  C_step = N * 4, C_offset = 0,
+                  C_rows = M, C_cols = N * cn / kercn; // kercn, cn
+        const int width = K;
+        kernel.setArg(0, A_device);
+        kernel.setArg(1, A_step);
+        kernel.setArg(2, A_offset);
+
+        kernel.setArg(3, B_device);
+        kernel.setArg(4, B_step);
+        kernel.setArg(5, B_offset);
+
+        kernel.setArg(6, C_device);
+        kernel.setArg(7, C_step);
+        kernel.setArg(8, C_offset);
+        kernel.setArg(9, C_rows);
+        kernel.setArg(10, C_cols);
+
+        kernel.setArg(11, width);
+        kernel.setArg(12, 1.f);
+        kernel.setArg(13, 0.f);
+
+        // global size
+        global_sizes = cl::NDRange(size_t(N * cn / kercn), size_t(M));
+        // local size
+        local_sizes = cl::NDRange(size_t(block_size), size_t(block_size));
+
+    } else if (kernel_file.find("mnn") != std::string::npos) {
         const int height = M,
                   outputChannel = N,
                   width = N,
