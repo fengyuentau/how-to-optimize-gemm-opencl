@@ -5,6 +5,8 @@ import subprocess
 def main(args):
     all_kernels = dict()
     for k in os.listdir("kernels"):
+        if args.skip_my_gemm_kernels and k.startswith("GEMM"):
+            continue
         if k.endswith(".cl"):
             key = k[:-3].lower()
             all_kernels[key] = os.path.join("kernels", k)
@@ -30,11 +32,11 @@ def main(args):
             for line in output_lines[2:]:
                 f.write(line + "\n")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("")
     parser.add_argument("--kernel", "-k", default="all")
     parser.add_argument("--save_dir", "-s", default="results")
     parser.add_argument("--with_clblast", action="store_true")
+    parser.add_argument("--skip_my_gemm_kernels", action="store_true")
     args = parser.parse_args()
     main(args)

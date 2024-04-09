@@ -249,8 +249,12 @@ int worker(cl::Device &device, const int M, const int N, const int K,
 #ifdef HAVE_CLBLAST
 int worker_clblast(cl::Device &device, const int M, const int N, const int K,
                    const int test_num_repeats) {
+    // Use OpenCL C API
+    cl_int err;
+
     // OpenCL context
-    auto context = cl::Context(std::vector<cl::Device>{device});
+    cl_device_id device_id = device();
+    cl_context context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &err);
 
     // Prepare data
     std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
@@ -259,43 +263,38 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
     int lda = K, ldb = N, ldc = N;
 
     // Transer host data to OpenCL device buffers
-    auto queue = cl::CommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE);
-    auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
-    auto B_device = cl::Buffer(context, CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
-    auto C_device = cl::Buffer(context, CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
-    queue.enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
-    queue.enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
-    queue.enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
+    cl_command_queue queue = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &err);
+    cl_mem A_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, A_host.size() * sizeof(float), A_host.data(), &err);
+    cl_mem B_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, B_host.size() * sizeof(float), B_host.data(), &err);
+    cl_mem C_device = clCreateBuffer(context, CL_MEM_WRITE_ONLY, C_host.size() * sizeof(float), NULL, &err);
 
     // Run CLBlast GEMM
-    cl::Event event{nullptr};
+    cl_event event;
     std::vector<double> elapsed_times;
-    auto raw_queue = queue();
-    auto raw_event = event();
     for (int i = 0; i < test_num_repeats; i++) {
         auto status = clblast::Gemm(clblast::Layout::kRowMajor,
                                     clblast::Transpose::kNo,
                                     clblast::Transpose::kNo,
                                     M, N, K,
                                     1.f, // alpha
-                                    A_device(), 0, lda,
-                                    B_device(), 0, ldb,
+                                    A_device, 0, lda,
+                                    B_device, 0, ldb,
                                     0.f, // beta
-                                    C_device(), 0, ldc,
-                                    &raw_queue, &raw_event);
+                                    C_device, 0, ldc,
+                                    &queue, &event);
         if (status == clblast::StatusCode::kSuccess) {
-            clWaitForEvents(1, &raw_event);
+            clWaitForEvents(1, &event);
             cl_ulong start_time, end_time;
-            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
-            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
+            clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
+            clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
             double elapsed_time = (end_time - start_time) / 1000.0;
             elapsed_times.push_back(elapsed_time);
         }
     }
 
     // Get data from device to host
-    queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
-    cl::WaitForEvents({event});
+    clEnqueueReadBuffer(queue, C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), 0, NULL, &event);
+    clWaitForEvents(1, &event);
 
     // Compare with Ref
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
