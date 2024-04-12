@@ -8,10 +8,7 @@
 
 #include "settings.hpp"
 #include "utils/init_vector.hpp"
-
-#define CL_HPP_MINIMUM_OPENCL_VERSION 120
-#define CL_HPP_TARGET_OPENCL_VERSION 120
-#include "CL/opencl.hpp"
+#include "utils/opencl_runtime.hpp"
 
 #ifdef HAVE_CLBLAST
 #include "clblast.h"
@@ -41,22 +38,6 @@ double GetMinTimeMillisecond(std::vector<double> elapsed_times) {
     return elapsed_times.front();
 }
 
-std::string readKernel(const std::string &filename) {
-    std::ifstream fhpp;
-    fhpp.open("settings.hpp");
-    std::stringstream hpp_stream;
-    hpp_stream << fhpp.rdbuf();
-    auto hpp_str = hpp_stream.str();
-
-    std::ifstream f;
-    f.open(filename);
-    std::stringstream stream;
-    stream << f.rdbuf();
-    auto kernel_str = stream.str();
-
-    return hpp_str + kernel_str;
-}
-
 void RefGemm(const int M, const int N, const int K,
              const float *A,
              const float *B,
@@ -84,20 +65,11 @@ float Compare(const int M, const int N, const float *C, const float *C_ref) {
     return max_diff;
 }
 
-int worker(cl::Device &device, const int M, const int N, const int K,
-           const int test_num_repeats, const std::string kernel_file) {
-    // OpenCL context
-    auto context = cl::Context(std::vector<cl::Device>{device});
-
-    // OpenCL program
-    auto kernels = readKernel(kernel_file);
-#if DEBUG
-    std::cout << "Kernels script:" << std::endl << kernels << std::endl;
-#endif
-    std::string build_options;
+int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
+           const int test_num_repeats, const std::string &kernel_file) {
+    std::string build_options, kernel_name("GEMM");
     if (kernel_file.find("opencv") != std::string::npos) {
-        size_t maxWorkGroupSize;
-        device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &maxWorkGroupSize);
+        size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
         int output_size_min = std::min(M, N);
         int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
         int cn = 1;
@@ -108,14 +80,14 @@ int worker(cl::Device &device, const int M, const int N, const int K,
         build_options += (N % block_size != 0) ? " -D NO_MULT" : "";
         // build_options += ""; // haveC
         // build_options += ""; // doubleSupport
+
+        kernel_name = "gemm";
     } else if (kernel_file.find("mnn") != std::string::npos) {
         build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
+
+        kernel_name = "matmul_buf";
     }
-    cl::Program program(context, kernels);
-    if (program.build({device}, build_options.c_str()) != CL_SUCCESS) {
-        std::cout << "Error building: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << std::endl;
-        return -1;
-    }
+    auto kernel = runtime.BuildKernel(kernel_file, build_options, kernel_name);
 
     // Prepare data
     std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
@@ -123,22 +95,18 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     InitVector(B_host);
 
     // Transer host data to OpenCL device buffers
-    auto queue = cl::CommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE);
-    auto A_device = cl::Buffer(context, CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
-    auto B_device = cl::Buffer(context, CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
-    auto C_device = cl::Buffer(context, CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
-    queue.enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
-    queue.enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
-    queue.enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
+    auto A_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
+    auto B_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
+    auto C_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
+    runtime.GetCommandQueue().enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
+    runtime.GetCommandQueue().enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
+    runtime.GetCommandQueue().enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
 
     // OpenCL kernel setup
-    auto kernel_name = std::string("GEMM");
-    cl::Kernel kernel(program, kernel_name.c_str());
     auto global_sizes = cl::NullRange,
          local_sizes = cl::NullRange;
     if (kernel_file.find("opencv") != std::string::npos) {
-        size_t maxWorkGroupSize;
-        device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &maxWorkGroupSize);
+        size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
         int output_size_min = std::min(M, N);
         int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
         int cn = 1;
@@ -216,7 +184,7 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     cl::Event event{nullptr};
     std::vector<double> elapsed_times;
     for (int i = 0; i < test_num_repeats; i++) {
-        auto error = queue.enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+        auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
         if (error != CL_SUCCESS) {
             std::cout << "error code: " << error << std::endl;
         }
@@ -227,7 +195,7 @@ int worker(cl::Device &device, const int M, const int N, const int K,
     }
 
     // Get data from device to host
-    queue.enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+    runtime.GetCommandQueue().enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
     cl::WaitForEvents({event});
 
     // Compare with Ref
@@ -247,15 +215,8 @@ int worker(cl::Device &device, const int M, const int N, const int K,
 }
 
 #ifdef HAVE_CLBLAST
-int worker_clblast(cl::Device &device, const int M, const int N, const int K,
+int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K,
                    const int test_num_repeats) {
-    // Use OpenCL C API
-    cl_int err;
-
-    // OpenCL context
-    cl_device_id device_id = device();
-    cl_context context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &err);
-
     // Prepare data
     std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
     InitVector(A_host);
@@ -263,13 +224,18 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
     int lda = K, ldb = N, ldc = N;
 
     // Transer host data to OpenCL device buffers
-    cl_command_queue queue = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &err);
-    cl_mem A_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, A_host.size() * sizeof(float), A_host.data(), &err);
-    cl_mem B_device = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, B_host.size() * sizeof(float), B_host.data(), &err);
-    cl_mem C_device = clCreateBuffer(context, CL_MEM_WRITE_ONLY, C_host.size() * sizeof(float), NULL, &err);
+    auto A_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
+    auto B_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
+    auto C_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
+    runtime.GetCommandQueue().enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
+    runtime.GetCommandQueue().enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
+    runtime.GetCommandQueue().enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
 
     // Run CLBlast GEMM
-    cl_event event;
+    auto queue = runtime.GetCommandQueue();
+    auto raw_queue = queue();
+    cl::Event event;
+    auto raw_event = event();
     std::vector<double> elapsed_times;
     for (int i = 0; i < test_num_repeats; i++) {
         auto status = clblast::Gemm(clblast::Layout::kRowMajor,
@@ -277,24 +243,24 @@ int worker_clblast(cl::Device &device, const int M, const int N, const int K,
                                     clblast::Transpose::kNo,
                                     M, N, K,
                                     1.f, // alpha
-                                    A_device, 0, lda,
-                                    B_device, 0, ldb,
+                                    A_device(), 0, lda,
+                                    B_device(), 0, ldb,
                                     0.f, // beta
-                                    C_device, 0, ldc,
-                                    &queue, &event);
+                                    C_device(), 0, ldc,
+                                    &raw_queue, &raw_event);
         if (status == clblast::StatusCode::kSuccess) {
-            clWaitForEvents(1, &event);
+            clWaitForEvents(1, &raw_event);
             cl_ulong start_time, end_time;
-            clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
-            clGetEventProfilingInfo(event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
+            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
+            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
             double elapsed_time = (end_time - start_time) / 1000.0;
             elapsed_times.push_back(elapsed_time);
         }
     }
 
     // Get data from device to host
-    clEnqueueReadBuffer(queue, C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), 0, NULL, &event);
-    clWaitForEvents(1, &event);
+    runtime.GetCommandQueue().enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+    cl::WaitForEvents({event});
 
     // Compare with Ref
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
@@ -324,33 +290,7 @@ int main(int argc, char **argv) {
         kernel_file = std::string(argv[1]);
     }
 
-    // OpenCL platforms
-    std::vector<cl::Platform> platforms;
-    cl::Platform::get(&platforms);
-    if (platforms.size() == 0) {
-        std::cerr << "Cannot get OpenCL platforms" << std::endl;
-        return -1;
-    }
-    auto platform = platforms[0];
-    {
-        std::string platform_name;
-        platform.getInfo(CL_PLATFORM_NAME, &platform_name);
-        std::cout << platform_name << std::endl;
-    }
-
-    // OpenCL devices
-    std::vector<cl::Device> devices;
-    platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
-    if (devices.size() == 0) {
-        std::cerr << "Cannot get OpenCL devices" << std::endl;
-        return -1;
-    }
-    auto device = devices[0];
-    {
-        std::string device_name;
-        device.getInfo(CL_DEVICE_NAME, &device_name);\
-        std::cout << device_name << std::endl;
-    }
+    OpenCLRuntime runtime;
 
     const int test_num_repeats = TEST_NUM_REPEATS;
     for (int scale = TEST_SCALE_START; scale <= TEST_SCALE_END; scale *= TEST_SCALE_FACTOR) {
@@ -358,9 +298,9 @@ int main(int argc, char **argv) {
                   N = OCL_GEMM_N < 0 ? scale : OCL_GEMM_N,
                   K = OCL_GEMM_K < 0 ? scale : OCL_GEMM_K;
         if (kernel_file == "clblast") {
-            worker_clblast(device, M, N, K, test_num_repeats);
+            worker_clblast(runtime, M, N, K, test_num_repeats);
         } else {
-            worker(device, M, N, K, test_num_repeats, kernel_file);
+            worker(runtime, M, N, K, test_num_repeats, kernel_file);
         }
     }
 

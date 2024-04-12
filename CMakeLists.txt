@@ -29,7 +29,7 @@ else()
 endif()
 
 if(OpenCL_FOUND)
-    add_executable(main main.cpp utils/init_vector.cpp)
+    add_executable(main main.cpp utils/init_vector.cpp utils/opencl_runtime.cpp)
     if(APPLE)
         target_link_libraries(main "-framework OpenCL")
     else()

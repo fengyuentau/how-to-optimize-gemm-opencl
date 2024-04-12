@@ -12,7 +12,7 @@ if (input1 >= global_size_dim0 || input2 >= global_size_dim1) { \
 return;                                                                                   \
 }
 
-__kernel void GEMM(GLOBAL_SIZE_2_DIMS __global const FLOAT* input_a,
+__kernel void matmul_buf(GLOBAL_SIZE_2_DIMS __global const FLOAT* input_a,
                      __global const FLOAT* input_b,
                      #ifdef BIAS
                      __global const FLOAT* input_c,

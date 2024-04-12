@@ -46,7 +46,7 @@
 #endif
 
 
-__kernel void GEMM(__global const uchar * A_ptr, int A_step, int A_offset,
+__kernel void gemm(__global const uchar * A_ptr, int A_step, int A_offset,
                    __global const uchar * B_ptr, int B_step, int B_offset,
                    __global uchar * D_ptr, int D_step, int D_offset, int D_rows, int D_cols,
                    int n, T1 alpha, T1 beta)
