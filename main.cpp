@@ -94,6 +94,10 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
             //     return false;
             kernel_name = "intelblas_gemm_buffer_NN";
         }
+    } else if (kernel_file.find("opencv_dnn_gemm_buffer") != std::string::npos) { // this kernel is normally run at half precision
+        build_options = "-DTYPE=1 -DZERO_BETA=1";
+
+        kernel_name = "gemm_buffer_NN_float";
     } else if (kernel_file.find("mnn") != std::string::npos) {
         build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
 
@@ -173,6 +177,20 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
         // size_t global[] = {roundUp(gx, lx), roundUp(gy, ly), 1};
         global_sizes = cl::NDRange(roundUp(gx, lx), roundUp(gy, ly), 1);
 
+    } else if (kernel_file.find("opencv_dnn_gemm_buffer") != std::string::npos) {
+        size_t sub_group_size = 8; // float16: 16
+
+        size_t lx = sub_group_size;
+        // size_t ly = (TransB != CblasNoTrans && TransA == CblasNoTrans && halfPrecisionMode) ? 2 : 4;
+        size_t ly = 4;
+        // int dx = (TransB != CblasNoTrans && TransA == CblasNoTrans) ? 1 : 4;
+        int dx = 4;
+        int dy = 8;
+        size_t gx = (size_t)(N + dx - 1) / dx;
+        size_t gy = (size_t)(M + dy - 1) / dy;
+
+        global_sizes = cl::NDRange((gx + lx - 1) / lx * lx, (gy + ly - 1) / ly * ly);
+        local_sizes = cl::NDRange(lx, ly);
     } else if (kernel_file.find("mnn") != std::string::npos) {
         const int height = M,
                   outputChannel = N,
@@ -236,6 +254,35 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
                 kernel.setArg(13, N);
                 kernel.setArg(14, start_index);
                 kernel.setArg(15, stride);
+
+                auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+                if (error != CL_SUCCESS) {
+                    std::cout << "error code: " << error << std::endl;
+                }
+                cl::WaitForEvents({event});
+                double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+                double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+                elapsed_time += (end - start) / 1000.0;
+            }
+            elapsed_times.push_back(elapsed_time);
+        }
+    } else if (kernel_file.find("opencv_dnn_gemm_buffer") != std::string::npos) {
+        int stride = 256;
+        for (int i = 0; i < test_num_repeats; i++) {
+            double elapsed_time = 0;
+            for(int start_index = 0; start_index < K; start_index += stride) {
+                kernel.setArg(0, A_device);
+                kernel.setArg(1, 0);
+                kernel.setArg(2, B_device);
+                kernel.setArg(3, 0);
+                kernel.setArg(4, C_device);
+                kernel.setArg(5, 0);
+                kernel.setArg(6, M);
+                kernel.setArg(7, N);
+                kernel.setArg(8, K);
+                kernel.setArg(9, 1.0f);
+                kernel.setArg(10, 0.f);
+                kernel.setArg(11, start_index);
 
                 auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
                 if (error != CL_SUCCESS) {
@@ -358,7 +405,8 @@ int main(int argc, char **argv) {
     }
 
     OpenCLRuntime runtime;
-    if (kernel_file.find("intel") != std::string::npos && !runtime.IsIntelSubgroupSupported()) {
+    if ((kernel_file.find("intel") != std::string::npos || kernel_file.find("opencv_dnn_gemm_buffer"))
+        && !runtime.IsIntelSubgroupSupported()) {
         printf("Kernel: %s, not supported!\n", kernel_file.c_str());
         return 0;
     }
