@@ -28,6 +28,8 @@ public:
     std::string GetDeviceName() const;
     size_t GetMaxWorkGroupSize() const;
 
+    bool IsIntelSubgroupSupported() const;
+
 private:
     std::string readKernel(const std::string &kernel_file);
 
@@ -41,6 +43,7 @@ private:
 
     cl::Platform platform;
     cl::Device device;
+    std::string extentions;
     std::shared_ptr<cl::Context> context_ptr;
     std::shared_ptr<cl::CommandQueue> queue_ptr;
 };

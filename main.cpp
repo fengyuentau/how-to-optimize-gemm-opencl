@@ -68,12 +68,12 @@ float Compare(const int M, const int N, const float *C, const float *C_ref) {
 int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
            const int test_num_repeats, const std::string &kernel_file) {
     std::string build_options, kernel_name("GEMM");
-    if (kernel_file.find("opencv") != std::string::npos) {
+    if (kernel_file.find("opencv_gemm") != std::string::npos) {
         size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
         int output_size_min = std::min(M, N);
         int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
         int cn = 1;
-	int kercn = 4;
+        int kercn = 4;
         int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
 
         build_options = "-DT=float -DT1=float -DWT=float4 -Dcn=" + std::to_string(cn) + " -Dkercn=" + std::to_string(kercn) + " -DLOCAL_SIZE=" + std::to_string(block_size);
@@ -82,6 +82,18 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
         // build_options += ""; // doubleSupport
 
         kernel_name = "gemm";
+    } else if (kernel_file.find("opencv_intel_gemm") != std::string::npos) {
+        if (M % 32 == 0 && N % 32 == 0 && K % 16 == 0) {
+            kernel_name = "intelblas_gemm_buffer_NN_sp";
+        } else {
+            // if (M % 2 != 0)
+            //     return false;
+            // // vload4(0, dst_write0) - 4 cols
+            // // multiply by lx: 8
+            // if (N % (4*8) != 0)
+            //     return false;
+            kernel_name = "intelblas_gemm_buffer_NN";
+        }
     } else if (kernel_file.find("mnn") != std::string::npos) {
         build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
 
@@ -105,7 +117,7 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
     // OpenCL kernel setup
     auto global_sizes = cl::NullRange,
          local_sizes = cl::NullRange;
-    if (kernel_file.find("opencv") != std::string::npos) {
+    if (kernel_file.find("opencv_gemm") != std::string::npos) {
         size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
         int output_size_min = std::min(M, N);
         int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
@@ -140,6 +152,26 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
         global_sizes = cl::NDRange(size_t(N * cn / kercn), size_t(M));
         // local size
         local_sizes = cl::NDRange(size_t(block_size), size_t(block_size));
+
+    } else if (kernel_file.find("opencv_intel_gemm") != std::string::npos) {
+        unsigned int lx = 8, ly = 4;
+        unsigned int dx = 4, dy = 8;
+
+        // divUp: (a + b - 1) / b
+        auto divUp = [](size_t a, size_t b) {
+            return (a + b - 1) / b;
+        };
+        const size_t gx = divUp((size_t)N, dx);
+        const size_t gy = divUp((size_t)M, dy);
+
+        // size_t local[] = {lx, ly, 1};
+        local_sizes = cl::NDRange(lx, ly, 1);
+        // roundUp: a + b - 1 - (a + b -1) % b
+        auto roundUp = [](size_t a, size_t b) {
+            return a + b - 1 - (a + b -1) % b;
+        };
+        // size_t global[] = {roundUp(gx, lx), roundUp(gy, ly), 1};
+        global_sizes = cl::NDRange(roundUp(gx, lx), roundUp(gy, ly), 1);
 
     } else if (kernel_file.find("mnn") != std::string::npos) {
         const int height = M,
@@ -183,15 +215,50 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
     // Run kernel
     cl::Event event{nullptr};
     std::vector<double> elapsed_times;
-    for (int i = 0; i < test_num_repeats; i++) {
-        auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
-        if (error != CL_SUCCESS) {
-            std::cout << "error code: " << error << std::endl;
+    if (kernel_file.find("opencv_intel_gemm") != std::string::npos) {
+        int stride = (M * N < 1024 * 1024) ? 10000000 : 256;
+        for (int i = 0; i < test_num_repeats; i++) {
+            double elapsed_time = 0;
+            for(int start_index = 0; start_index < K; start_index += stride) {
+                kernel.setArg(0, A_device);
+                kernel.setArg(1, 0);
+                kernel.setArg(2, B_device);
+                kernel.setArg(3, 0);
+                kernel.setArg(4, C_device);
+                kernel.setArg(5, 0);
+                kernel.setArg(6, M);
+                kernel.setArg(7, N);
+                kernel.setArg(8, K);
+                kernel.setArg(9, 1.0f);
+                kernel.setArg(10, 0.f);
+                kernel.setArg(11, K);
+                kernel.setArg(12, N);
+                kernel.setArg(13, N);
+                kernel.setArg(14, start_index);
+                kernel.setArg(15, stride);
+
+                auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+                if (error != CL_SUCCESS) {
+                    std::cout << "error code: " << error << std::endl;
+                }
+                cl::WaitForEvents({event});
+                double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+                double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+                elapsed_time += (end - start) / 1000.0;
+            }
+            elapsed_times.push_back(elapsed_time);
         }
-        cl::WaitForEvents({event});
-        double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-        double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-        elapsed_times.push_back(((end - start) / 1000.0));
+    } else {
+        for (int i = 0; i < test_num_repeats; i++) {
+            auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+            if (error != CL_SUCCESS) {
+                std::cout << "error code: " << error << std::endl;
+            }
+            cl::WaitForEvents({event});
+            double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+            double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+            elapsed_times.push_back(((end - start) / 1000.0));
+        }
     }
 
     // Get data from device to host
@@ -291,6 +358,10 @@ int main(int argc, char **argv) {
     }
 
     OpenCLRuntime runtime;
+    if (kernel_file.find("intel") != std::string::npos && !runtime.IsIntelSubgroupSupported()) {
+        printf("Kernel: %s, not supported!\n", kernel_file.c_str());
+        return 0;
+    }
 
     const int test_num_repeats = TEST_NUM_REPEATS;
     for (int scale = TEST_SCALE_START; scale <= TEST_SCALE_END; scale *= TEST_SCALE_FACTOR) {

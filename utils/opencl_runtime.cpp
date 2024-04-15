@@ -21,6 +21,8 @@ OpenCLRuntime::OpenCLRuntime(int platform_id, int device_id) {
         status = -2;
     }
 
+    device.getInfo(CL_DEVICE_EXTENSIONS, &extentions);
+
     context_ptr = std::make_shared<cl::Context>(std::vector<cl::Device>{device});
     queue_ptr = std::make_shared<cl::CommandQueue>(*context_ptr, device, CL_QUEUE_PROFILING_ENABLE);
 }
@@ -65,6 +67,10 @@ size_t OpenCLRuntime::GetMaxWorkGroupSize() const {
     size_t MaxWorkGroupSize;
     device.getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, &MaxWorkGroupSize);
     return MaxWorkGroupSize;
+}
+
+bool OpenCLRuntime::IsIntelSubgroupSupported()const {
+    return extentions.find("cl_intel_subgroups") != std::string::npos;
 }
 
 std::string OpenCLRuntime::readKernel(const std::string &kernel_file) {
