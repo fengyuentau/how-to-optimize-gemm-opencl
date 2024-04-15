@@ -20,14 +20,21 @@ for result_file in os.listdir(args.load_dir):
     platform_name, device_name, kernel_name = result_file[:-4].split("+")
     x = list()
     y = list()
+    skip = False
     with open(os.path.join(args.load_dir, result_file)) as f:
         for line in f.readlines():
+            if "not supported" in line:
+                skip = True
+                break
             line = line.strip()
             splits = line.split(",")
             scale = int(splits[1].replace("M=", ""))
             x.append(scale)
             gflops = float(splits[7].replace("gflops=", ""))
             y.append(gflops)
+
+    if skip:
+        continue
 
     # plt.clf()
     plt.plot(x, y, label=kernel_name)

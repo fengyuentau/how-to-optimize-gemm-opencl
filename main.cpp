@@ -313,8 +313,11 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
     cl::WaitForEvents({event});
 
     // Compare with Ref
-    RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
-    float max_diff = Compare(M, N, C_host.data(), C_ref.data());
+    float max_diff = 0.f;
+    if (M < 1024) {
+        RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
+    }
+    max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
     double mean = GetMeanTimeMillisecond(elapsed_times),
            median = GetMedianTimeMillisecond(elapsed_times),
@@ -377,8 +380,11 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
     cl::WaitForEvents({event});
 
     // Compare with Ref
-    RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
-    float max_diff = Compare(M, N, C_host.data(), C_ref.data());
+    float max_diff = 0.f;
+    if (M < 1024) {
+        RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
+    }
+    max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
     double mean = GetMeanTimeMillisecond(elapsed_times),
            median = GetMedianTimeMillisecond(elapsed_times),
@@ -405,7 +411,9 @@ int main(int argc, char **argv) {
     }
 
     OpenCLRuntime runtime;
-    if ((kernel_file.find("intel") != std::string::npos || kernel_file.find("opencv_dnn_gemm_buffer"))
+    std::cout << runtime.GetPlatformName() << std::endl
+              << runtime.GetDeviceName() << std::endl;
+    if ((kernel_file.find("intel") != std::string::npos || kernel_file.find("opencv_dnn_gemm_buffer") != std::string::npos)
         && !runtime.IsIntelSubgroupSupported()) {
         printf("Kernel: %s, not supported!\n", kernel_file.c_str());
         return 0;

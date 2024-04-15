@@ -16,6 +16,7 @@
 class OpenCLRuntime {
 public:
     OpenCLRuntime() : OpenCLRuntime(0, 0) {}
+    OpenCLRuntime(int platform_id) : OpenCLRuntime(platform_id, 0) {}
     OpenCLRuntime(int platform_id, int device_id);
 
     cl::Kernel BuildKernel(const std::string &kernel_file,
