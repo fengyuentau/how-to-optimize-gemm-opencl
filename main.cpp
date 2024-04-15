@@ -1,14 +1,15 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <memory>
 
 #include <string>
 #include <sstream>
 #include <fstream>
 
 #include "settings.hpp"
-#include "utils/init_vector.hpp"
-#include "utils/opencl_runtime.hpp"
+#include "utils/common.hpp"
+#include "utils/opencv_gemm_executor.hpp"
 
 #ifdef HAVE_CLBLAST
 #include "clblast.h"
@@ -19,192 +20,163 @@
 #define TEST_NUM_REPEATS 1
 #endif
 
-double GetMeanTimeMillisecond(std::vector<double> elapsed_times) {
-    return std::accumulate(elapsed_times.begin(), elapsed_times.end(), 0.f) / (double)elapsed_times.size();
-}
-
-double GetMedianTimeMillisecond(std::vector<double> elapsed_times) {
-    std::sort(elapsed_times.begin(), elapsed_times.end());
-
-    auto half_length = static_cast<size_t>(elapsed_times.size() / 2);
-    return elapsed_times.size() % 2 == 0 ?
-                (elapsed_times[half_length - 1] + elapsed_times[half_length]) / 2.0f :
-                elapsed_times[half_length];
-}
-
-double GetMinTimeMillisecond(std::vector<double> elapsed_times) {
-    std::sort(elapsed_times.begin(), elapsed_times.end());
-
-    return elapsed_times.front();
-}
-
-void RefGemm(const int M, const int N, const int K,
-             const float *A,
-             const float *B,
-             float *C) {
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            float c = 0;
-            for (int k = 0; k < K; k++) {
-                c += A[i * K + k] * B[k * N + j];
-            }
-            C[i * N + j] = c;
-        }
-    }
-}
-
-float Compare(const int M, const int N, const float *C, const float *C_ref) {
-    float diff, max_diff = 0.0f;
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            float c = C[i * N + j], c_ref = C_ref[i * N + j];
-            diff = std::abs(c - c_ref);
-            max_diff = diff > max_diff ? diff : max_diff;
-        }
-    }
-    return max_diff;
-}
-
 int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
            const int test_num_repeats, const std::string &kernel_file) {
-    std::string build_options, kernel_name("GEMM");
-    if (kernel_file.find("opencv") != std::string::npos) {
-        size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
-        int output_size_min = std::min(M, N);
-        int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
-        int cn = 1;
-	int kercn = 4;
-        int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
+    // std::string build_options, kernel_name("GEMM");
+    // if (kernel_file.find("opencv") != std::string::npos) {
+    //     size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
+    //     int output_size_min = std::min(M, N);
+    //     int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
+    //     int cn = 1;
+    //     int kercn = 4;
+    //     int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
 
-        build_options = "-DT=float -DT1=float -DWT=float4 -Dcn=" + std::to_string(cn) + " -Dkercn=" + std::to_string(kercn) + " -DLOCAL_SIZE=" + std::to_string(block_size);
-        build_options += (N % block_size != 0) ? " -D NO_MULT" : "";
-        // build_options += ""; // haveC
-        // build_options += ""; // doubleSupport
+    //     build_options = "-DT=float -DT1=float -DWT=float4 -Dcn=" + std::to_string(cn) + " -Dkercn=" + std::to_string(kercn) + " -DLOCAL_SIZE=" + std::to_string(block_size);
+    //     build_options += (N % block_size != 0) ? " -D NO_MULT" : "";
+    //     // build_options += ""; // haveC
+    //     // build_options += ""; // doubleSupport
 
-        kernel_name = "gemm";
-    } else if (kernel_file.find("mnn") != std::string::npos) {
-        build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
+    //     kernel_name = "gemm";
+    // } else if (kernel_file.find("mnn") != std::string::npos) {
+    //     build_options = "-DFLOAT=float  -DFLOAT2=float2 -DFLOAT3=float3 -DFLOAT4=float4 -DFLOAT8=float8 -DRI_F=read_imagef -DFLOAT16=float16 -DWI_F=write_imagef -DCONVERT_FLOAT4=convert_float4 -DCONVERT_FLOAT8=convert_float8 -DCONVERT_FLOAT16=convert_float16";
 
-        kernel_name = "matmul_buf";
-    }
-    auto kernel = runtime.BuildKernel(kernel_file, build_options, kernel_name);
+    //     kernel_name = "matmul_buf";
+    // }
+    // auto kernel = runtime.BuildKernel(kernel_file, build_options, kernel_name);
+
+    // // Prepare data
+    // std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
+    // InitVector(A_host);
+    // InitVector(B_host);
+
+    // // Transer host data to OpenCL device buffers
+    // auto A_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
+    // auto B_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
+    // auto C_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
+    // runtime.GetCommandQueue().enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
+    // runtime.GetCommandQueue().enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
+    // runtime.GetCommandQueue().enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
+
+    // // OpenCL kernel setup
+    // auto global_sizes = cl::NullRange,
+    //      local_sizes = cl::NullRange;
+    // if (kernel_file.find("opencv") != std::string::npos) {
+    //     size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
+    //     int output_size_min = std::min(M, N);
+    //     int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
+    //     int cn = 1;
+    //     int kercn = 4;
+    //     int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
+
+    //     const int A_step = K * 4, A_offset = 0,
+    //               B_step = N * 4, B_offset = 0,
+    //               C_step = N * 4, C_offset = 0,
+    //               C_rows = M, C_cols = N * cn / kercn; // kercn, cn
+    //     const int width = K;
+    //     kernel.setArg(0, A_device);
+    //     kernel.setArg(1, A_step);
+    //     kernel.setArg(2, A_offset);
+
+    //     kernel.setArg(3, B_device);
+    //     kernel.setArg(4, B_step);
+    //     kernel.setArg(5, B_offset);
+
+    //     kernel.setArg(6, C_device);
+    //     kernel.setArg(7, C_step);
+    //     kernel.setArg(8, C_offset);
+    //     kernel.setArg(9, C_rows);
+    //     kernel.setArg(10, C_cols);
+
+    //     kernel.setArg(11, width);
+    //     kernel.setArg(12, 1.f);
+    //     kernel.setArg(13, 0.f);
+
+    //     // global size
+    //     global_sizes = cl::NDRange(size_t(N * cn / kercn), size_t(M));
+    //     // local size
+    //     local_sizes = cl::NDRange(size_t(block_size), size_t(block_size));
+
+    // } else if (kernel_file.find("mnn") != std::string::npos) {
+    //     const int height = M,
+    //               outputChannel = N,
+    //               width = N,
+    //               outputChannelBlocks = static_cast<int>((outputChannel + 4 - 1) / 4),
+    //               widthBlocks = static_cast<int>((width + 4 - 1) / 4);
+    //     kernel.setArg(0, widthBlocks);
+    //     kernel.setArg(1, height);
+    //     kernel.setArg(2, A_device);
+    //     kernel.setArg(3, B_device);
+    //     kernel.setArg(4, C_device); // no_bias
+    //     kernel.setArg(5, outputChannel);
+    //     kernel.setArg(6, outputChannelBlocks);
+    //     kernel.setArg(7, widthBlocks);
+    //     kernel.setArg(8, width);
+
+    //     global_sizes = cl::NDRange(M, N);
+    // } else { // GEMM
+    //     kernel.setArg(0, M);
+    //     kernel.setArg(1, N);
+    //     kernel.setArg(2, K);
+    //     kernel.setArg(3, A_device);
+    //     kernel.setArg(4, B_device);
+    //     kernel.setArg(5, C_device);
+
+    //     if (kernel_file.find("GEMM0") != std::string::npos) {
+    //         global_sizes = cl::NDRange(M, N);
+    //     } else if (kernel_file.find("GEMM1") != std::string::npos) {
+    //         const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+    //         global_sizes = cl::NDRange(M, N);
+    //         local_sizes = cl::NDRange(tile_size, tile_size); // tile_size x tile_size <= Max work group size
+    //     } else if (kernel_file.find("GEMM2") != std::string::npos) {
+    //         const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
+    //         const size_t work_per_thread = OCL_GEMM_KERNEL_WORK_PER_THREAD;
+    //         global_sizes = cl::NDRange(M, N / work_per_thread);
+    //         local_sizes = cl::NDRange(tile_size, tile_size / work_per_thread);
+    //     }
+    // }
+
+    // // Run kernel
+    // cl::Event event{nullptr};
+    // std::vector<double> elapsed_times;
+    // for (int i = 0; i < test_num_repeats; i++) {
+    //     auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
+    //     if (error != CL_SUCCESS) {
+    //         std::cout << "error code: " << error << std::endl;
+    //     }
+    //     cl::WaitForEvents({event});
+    //     double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+    //     double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
+    //     elapsed_times.push_back(((end - start) / 1000.0));
+    // }
+
+    // // Get data from device to host
+    // runtime.GetCommandQueue().enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
+    // cl::WaitForEvents({event});
 
     // Prepare data
     std::vector<float> A_host(M * K), B_host(K * N), C_host(M * N, 0.f), C_ref(M * N, 0.f);
     InitVector(A_host);
     InitVector(B_host);
 
-    // Transer host data to OpenCL device buffers
-    auto A_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, A_host.size() * sizeof(float));
-    auto B_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, B_host.size() * sizeof(float));
-    auto C_device = cl::Buffer(runtime.GetContext(), CL_MEM_READ_WRITE, C_host.size() * sizeof(float));
-    runtime.GetCommandQueue().enqueueWriteBuffer(A_device, CL_TRUE, 0, A_host.size() * sizeof(float), A_host.data());
-    runtime.GetCommandQueue().enqueueWriteBuffer(B_device, CL_TRUE, 0, B_host.size() * sizeof(float), B_host.data());
-    runtime.GetCommandQueue().enqueueWriteBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data());
-
-    // OpenCL kernel setup
-    auto global_sizes = cl::NullRange,
-         local_sizes = cl::NullRange;
+    std::shared_ptr<GemmExecutor> executor;
+    std::string kernel_name = "GEMM";
     if (kernel_file.find("opencv") != std::string::npos) {
-        size_t maxWorkGroupSize = runtime.GetMaxWorkGroupSize();
-        int output_size_min = std::min(M, N);
-        int wg_size = std::min(int(maxWorkGroupSize), output_size_min * output_size_min);
-        int cn = 1;
-        int kercn = 4;
-        int block_size = (wg_size / (32*cn) < 32) ? (wg_size / (16*cn) < 16) ? (wg_size / (8*cn) < 8) ? 1 : 8 : 16 : 32;
-
-        const int A_step = K * 4, A_offset = 0,
-                  B_step = N * 4, B_offset = 0,
-                  C_step = N * 4, C_offset = 0,
-                  C_rows = M, C_cols = N * cn / kercn; // kercn, cn
-        const int width = K;
-        kernel.setArg(0, A_device);
-        kernel.setArg(1, A_step);
-        kernel.setArg(2, A_offset);
-
-        kernel.setArg(3, B_device);
-        kernel.setArg(4, B_step);
-        kernel.setArg(5, B_offset);
-
-        kernel.setArg(6, C_device);
-        kernel.setArg(7, C_step);
-        kernel.setArg(8, C_offset);
-        kernel.setArg(9, C_rows);
-        kernel.setArg(10, C_cols);
-
-        kernel.setArg(11, width);
-        kernel.setArg(12, 1.f);
-        kernel.setArg(13, 0.f);
-
-        // global size
-        global_sizes = cl::NDRange(size_t(N * cn / kercn), size_t(M));
-        // local size
-        local_sizes = cl::NDRange(size_t(block_size), size_t(block_size));
-
-    } else if (kernel_file.find("mnn") != std::string::npos) {
-        const int height = M,
-                  outputChannel = N,
-                  width = N,
-                  outputChannelBlocks = static_cast<int>((outputChannel + 4 - 1) / 4),
-                  widthBlocks = static_cast<int>((width + 4 - 1) / 4);
-        kernel.setArg(0, widthBlocks);
-        kernel.setArg(1, height);
-        kernel.setArg(2, A_device);
-        kernel.setArg(3, B_device);
-        kernel.setArg(4, C_device); // no_bias
-        kernel.setArg(5, outputChannel);
-        kernel.setArg(6, outputChannelBlocks);
-        kernel.setArg(7, widthBlocks);
-        kernel.setArg(8, width);
-
-        global_sizes = cl::NDRange(M, N);
-    } else { // GEMM
-        kernel.setArg(0, M);
-        kernel.setArg(1, N);
-        kernel.setArg(2, K);
-        kernel.setArg(3, A_device);
-        kernel.setArg(4, B_device);
-        kernel.setArg(5, C_device);
-
-        if (kernel_file.find("GEMM0") != std::string::npos) {
-            global_sizes = cl::NDRange(M, N);
-        } else if (kernel_file.find("GEMM1") != std::string::npos) {
-            const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
-            global_sizes = cl::NDRange(M, N);
-            local_sizes = cl::NDRange(tile_size, tile_size); // tile_size x tile_size <= Max work group size
-        } else if (kernel_file.find("GEMM2") != std::string::npos) {
-            const size_t tile_size = OCL_GEMM_KERNEL_TILE_SIZE;
-            const size_t work_per_thread = OCL_GEMM_KERNEL_WORK_PER_THREAD;
-            global_sizes = cl::NDRange(M, N / work_per_thread);
-            local_sizes = cl::NDRange(tile_size, tile_size / work_per_thread);
-        }
+        executor = std::make_shared<OpenCVGemmExecutor>(&runtime, M, N, K);
+        kernel_name = "gemm";
     }
 
-    // Run kernel
-    cl::Event event{nullptr};
-    std::vector<double> elapsed_times;
-    for (int i = 0; i < test_num_repeats; i++) {
-        auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
-        if (error != CL_SUCCESS) {
-            std::cout << "error code: " << error << std::endl;
-        }
-        cl::WaitForEvents({event});
-        double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-        double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-        elapsed_times.push_back(((end - start) / 1000.0));
-    }
-
-    // Get data from device to host
-    runtime.GetCommandQueue().enqueueReadBuffer(C_device, CL_TRUE, 0, C_host.size() * sizeof(float), C_host.data(), nullptr, &event);
-    cl::WaitForEvents({event});
+    executor->BuildKernel(kernel_file, "", runtime.GetMaxWorkGroupSize());
+    std::vector<double> elapsed_time;
+    executor->InitializeData(A_host, B_host, C_host);
+    executor->RunKernel(test_num_repeats, C_host, elapsed_time);
 
     // Compare with Ref
     RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
     float max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
-    double mean = GetMeanTimeMillisecond(elapsed_times),
-           median = GetMedianTimeMillisecond(elapsed_times),
-           minimum = GetMinTimeMillisecond(elapsed_times);
+    double mean = GetMeanTimeMillisecond(elapsed_time),
+           median = GetMedianTimeMillisecond(elapsed_time),
+           minimum = GetMinTimeMillisecond(elapsed_time);
 
     double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
 
