@@ -1,6 +1,6 @@
 # how-to-optimize-gemm-opencl
 
-Step-by-step row major GEMM optimization tutorial on OpenCL GPU platforms (OpenCL >= 1.2). Tested on Khadas VIM4 (A311D2).
+Step-by-step row major GEMM optimization tutorial on OpenCL GPU platforms (OpenCL >= 1.2). Tested on Khadas VIM4 (A311D2), i7-12700K, Apple M1, StarFive Vision2.
 
 ## Environment
 
@@ -42,6 +42,9 @@ cmake --build build
 ```shell
 python3 run.py # Run all kernels in ./kernels
 python3 run.py -k GEMM0 # Run ./kernels/GEMM0.cl
+python3 run.py --with_clblast # Run all kernels in ./kernels and clblast
+
+python3 plot.py # Plot results
 ```
 
 ## FAQ
