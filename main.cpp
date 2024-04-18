@@ -19,6 +19,10 @@
 #include <Accelerate/Accelerate.h>
 #endif
 
+#ifdef HAVE_OPENBLAS
+#include "cblas.h"
+#endif
+
 #define DEBUG 0
 #if DEBUG
 #define TEST_NUM_REPEATS 1
@@ -28,7 +32,7 @@ void RefGemm(const int M, const int N, const int K,
              const float *A,
              const float *B,
              float *C) {
-#ifdef HAVE_ACCELERATE
+#if defined(HAVE_ACCELERATE) || defined(HAVE_OPENBLAS)
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, M, N, K, 1.f, A, K, B, N, 0.f, C, N);
     return;
 #endif

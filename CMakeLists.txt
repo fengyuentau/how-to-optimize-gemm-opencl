@@ -4,7 +4,7 @@ project("how-to-optimize-gemm-opencl")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 11)
 
-find_package(OpenCL)
+find_package(OpenCL REQUIRED)
 
 if(OpenCL_FOUND)
     message(STATUS "OpenCL headers location: ${OpenCL_INCLUDE_DIRS}")
@@ -38,6 +38,13 @@ if(OpenCL_FOUND)
         target_link_libraries(main "OpenCL")
     endif()
 endif()
+
+set(BLA_VENDER OpenBLAS)
+find_package(BLAS REQUIRED)
+if(BLAS_FOUND)
+    add_compile_definitions(HAVE_OPENBLAS)
+    target_link_libraries(main ${BLAS_LIBRARIES})
+endif(BLAS_FOUND)
 
 option(WITH_CLBLAST "Build with CLBlast" OFF)
 if(WITH_CLBLAST)

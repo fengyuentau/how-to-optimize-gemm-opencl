@@ -8,6 +8,7 @@ Ubuntu 22.04:
 
 ```shell
 sudo apt install clinfo opencl-headers mesa-opencl-icd ocl-icd-opencl-dev
+sudo apt install libopenblas-dev # for reference
 ```
 
 ## Build
