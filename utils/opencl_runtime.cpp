@@ -24,7 +24,7 @@ OpenCLRuntime::OpenCLRuntime(int platform_id, int device_id) {
     device.getInfo(CL_DEVICE_EXTENSIONS, &extentions);
 
     context_ptr = std::make_shared<cl::Context>(std::vector<cl::Device>{device});
-    queue_ptr = std::make_shared<cl::CommandQueue>(*context_ptr, device, CL_QUEUE_PROFILING_ENABLE);
+    queue_ptr = std::make_shared<cl::CommandQueue>(*context_ptr, device);
 }
 
 cl::Kernel OpenCLRuntime::BuildKernel(const std::string &kernel_file,

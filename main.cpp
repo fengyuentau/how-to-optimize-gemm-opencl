@@ -9,6 +9,7 @@
 #include "settings.hpp"
 #include "utils/init_vector.hpp"
 #include "utils/opencl_runtime.hpp"
+#include "utils/timer.hpp"
 
 #ifdef HAVE_CLBLAST
 #include "clblast.h"
@@ -232,11 +233,12 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
 
     // Run kernel
     cl::Event event{nullptr};
-    std::vector<double> elapsed_times;
+    TickMeter meter;
+    meter.Reset();
     if (kernel_file.find("opencv_intel_gemm") != std::string::npos) {
         int stride = (M * N < 1024 * 1024) ? 10000000 : 256;
         for (int i = 0; i < test_num_repeats; i++) {
-            double elapsed_time = 0;
+            meter.Start();
             for(int start_index = 0; start_index < K; start_index += stride) {
                 kernel.setArg(0, A_device);
                 kernel.setArg(1, 0);
@@ -260,16 +262,13 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
                     std::cout << "error code: " << error << std::endl;
                 }
                 cl::WaitForEvents({event});
-                double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-                double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-                elapsed_time += (end - start) / 1000.0;
             }
-            elapsed_times.push_back(elapsed_time);
+            meter.End();
         }
     } else if (kernel_file.find("opencv_dnn_gemm_buffer") != std::string::npos) {
         int stride = 256;
         for (int i = 0; i < test_num_repeats; i++) {
-            double elapsed_time = 0;
+            meter.Start();
             for(int start_index = 0; start_index < K; start_index += stride) {
                 kernel.setArg(0, A_device);
                 kernel.setArg(1, 0);
@@ -289,22 +288,18 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
                     std::cout << "error code: " << error << std::endl;
                 }
                 cl::WaitForEvents({event});
-                double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-                double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-                elapsed_time += (end - start) / 1000.0;
             }
-            elapsed_times.push_back(elapsed_time);
+            meter.End();
         }
     } else {
         for (int i = 0; i < test_num_repeats; i++) {
+            meter.Start();
             auto error = runtime.GetCommandQueue().enqueueNDRangeKernel(kernel, cl::NullRange, global_sizes, local_sizes, nullptr, &event);
             if (error != CL_SUCCESS) {
                 std::cout << "error code: " << error << std::endl;
             }
             cl::WaitForEvents({event});
-            double start = event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-            double end = event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-            elapsed_times.push_back(((end - start) / 1000.0));
+            meter.End();
         }
     }
 
@@ -319,13 +314,12 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
         max_diff = Compare(M, N, C_host.data(), C_ref.data());
     }
 
-    double mean = GetMeanTimeMillisecond(elapsed_times),
-           median = GetMedianTimeMillisecond(elapsed_times),
-           minimum = GetMinTimeMillisecond(elapsed_times);
+    double mean, median, minimum;
+    meter.GetPerformanceResults(mean, median, minimum);
 
     double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
 
-    printf("Kernel: %s, M=%d, N=%d, K=%d, mean=%.2fms, median=%.2fms, min=%.2fms, gflops=%f, max_diff=%f\n",
+    printf("Kernel: %s, M=%d, N=%d, K=%d, mean=%.4fms, median=%.4fms, min=%.4fms, gflops=%f, max_diff=%f\n",
             kernel_file.c_str(), M, N, K, mean, median, minimum, gflops, max_diff);
 
     return 1;
@@ -351,10 +345,12 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
     // Run CLBlast GEMM
     auto queue = runtime.GetCommandQueue();
     auto raw_queue = queue();
-    cl::Event event;
+    cl::Event event{nullptr};
     auto raw_event = event();
-    std::vector<double> elapsed_times;
+    TickMeter meter;
+    meter.Reset();
     for (int i = 0; i < test_num_repeats; i++) {
+        meter.Start();
         auto status = clblast::Gemm(clblast::Layout::kRowMajor,
                                     clblast::Transpose::kNo,
                                     clblast::Transpose::kNo,
@@ -367,12 +363,9 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
                                     &raw_queue, &raw_event);
         if (status == clblast::StatusCode::kSuccess) {
             clWaitForEvents(1, &raw_event);
-            cl_ulong start_time, end_time;
-            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_START, sizeof(start_time), &start_time, NULL);
-            clGetEventProfilingInfo(raw_event, CL_PROFILING_COMMAND_END, sizeof(end_time), &end_time, NULL);
-            double elapsed_time = (end_time - start_time) / 1000.0;
-            elapsed_times.push_back(elapsed_time);
+            // clFinish(raw_queue);
         }
+        meter.End();
     }
 
     // Get data from device to host
@@ -386,13 +379,12 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
         max_diff = Compare(M, N, C_host.data(), C_ref.data());
     }
 
-    double mean = GetMeanTimeMillisecond(elapsed_times),
-           median = GetMedianTimeMillisecond(elapsed_times),
-           minimum = GetMinTimeMillisecond(elapsed_times);
+    double mean, median, minimum;
+    meter.GetPerformanceResults(mean, median, minimum);
 
     double gflops = (2.0 * M * N * K * 1.0e-6) / mean;
 
-    printf("Kernel: CLBlast, M=%d, N=%d, K=%d, mean=%.2fms, median=%.2fms, min=%.2fms, gflops=%f, max_diff=%f\n",
+    printf("Kernel: CLBlast, M=%d, N=%d, K=%d, mean=%.4fms, median=%.4fms, min=%.4fms, gflops=%f, max_diff=%f\n",
             M, N, K, mean, median, minimum, gflops, max_diff);
 
     return 1;
