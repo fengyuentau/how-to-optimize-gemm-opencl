@@ -15,34 +15,23 @@
 #include "clblast.h"
 #endif
 
+#ifdef HAVE_ACCELERATE
+#include <Accelerate/Accelerate.h>
+#endif
+
 #define DEBUG 0
 #if DEBUG
 #define TEST_NUM_REPEATS 1
 #endif
 
-double GetMeanTimeMillisecond(std::vector<double> elapsed_times) {
-    return std::accumulate(elapsed_times.begin(), elapsed_times.end(), 0.f) / (double)elapsed_times.size();
-}
-
-double GetMedianTimeMillisecond(std::vector<double> elapsed_times) {
-    std::sort(elapsed_times.begin(), elapsed_times.end());
-
-    auto half_length = static_cast<size_t>(elapsed_times.size() / 2);
-    return elapsed_times.size() % 2 == 0 ?
-                (elapsed_times[half_length - 1] + elapsed_times[half_length]) / 2.0f :
-                elapsed_times[half_length];
-}
-
-double GetMinTimeMillisecond(std::vector<double> elapsed_times) {
-    std::sort(elapsed_times.begin(), elapsed_times.end());
-
-    return elapsed_times.front();
-}
-
 void RefGemm(const int M, const int N, const int K,
              const float *A,
              const float *B,
              float *C) {
+#ifdef HAVE_ACCELERATE
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, M, N, K, 1.f, A, K, B, N, 0.f, C, N);
+    return;
+#endif
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
             float c = 0;
@@ -309,10 +298,8 @@ int worker(OpenCLRuntime& runtime, const int M, const int N, const int K,
 
     // Compare with Ref
     float max_diff = 0.f;
-    if (M < 1024) {
-        RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
-        max_diff = Compare(M, N, C_host.data(), C_ref.data());
-    }
+    RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
+    max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
     double mean, median, minimum;
     meter.GetPerformanceResults(mean, median, minimum);
@@ -363,7 +350,9 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
                                     &raw_queue, &raw_event);
         if (status == clblast::StatusCode::kSuccess) {
             clWaitForEvents(1, &raw_event);
-            // clFinish(raw_queue);
+            clFinish(raw_queue);
+        } else {
+            std::cerr << "Kernel failed, status = " << static_cast<int32_t>(status);
         }
         meter.End();
     }
@@ -374,10 +363,8 @@ int worker_clblast(OpenCLRuntime& runtime, const int M, const int N, const int K
 
     // Compare with Ref
     float max_diff = 0.f;
-    if (M < 1024) {
-        RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
-        max_diff = Compare(M, N, C_host.data(), C_ref.data());
-    }
+    RefGemm(M, N, K, A_host.data(), B_host.data(), C_ref.data());
+    max_diff = Compare(M, N, C_host.data(), C_ref.data());
 
     double mean, median, minimum;
     meter.GetPerformanceResults(mean, median, minimum);
